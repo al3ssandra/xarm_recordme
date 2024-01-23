@@ -1,0 +1,18 @@
+install gstreamer and ffmpeg
+
+to be able to use docker without sudo:
+sudo groupadd docker
+sudo usermod -aG docker $USER
+
+create docker image:
+docker build --no-cache -t my-app:1.0 . 2>&1 | tee build.log 
+
+to allow imshow (not best option, see how x11 forwarding docker):
+xhost +local:`docker inspect --format='{{ .Config.Hostname }}' 0fe4653790c4`
+
+crate container and mount opncvproj folder inside container:
+docker run -d --rm --network host -e DISPLAY=$DISPLAY --device=/dev/ttyACM0 -v /home/alessandra/My-Project/robotic_tripod/opencvdocker/opncvproj:/opncvproj 0fe4653790c4
+
+onnx model from:
+https://github.com/onnx/models/blob/main/validated/vision/object_detection_segmentation/tiny-yolov3/model/tiny-yolov3-11.onnx
+https://medium.com/mlearning-ai/detecting-objects-with-yolov5-opencv-python-and-c-c7cf13d1483c
