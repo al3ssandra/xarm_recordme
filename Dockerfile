@@ -15,7 +15,9 @@ RUN apk update && apk --no-cache add \
     ffmpeg-dev \
     gstreamer-dev \
     gst-plugins-base-dev \
-    gtk+3.0-dev
+    gtk+3.0-dev \
+    eigen-dev \
+    cppunit-dev
 
 RUN wget -O opencv.zip https://github.com/opencv/opencv/archive/4.x.zip
 RUN unzip opencv.zip
