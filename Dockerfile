@@ -17,7 +17,8 @@ RUN apk update && apk --no-cache add \
     gst-plugins-base-dev \
     gtk+3.0-dev \
     eigen-dev \
-    cppunit-dev
+    cppunit-dev \
+    git
 
 RUN wget -O opencv.zip https://github.com/opencv/opencv/archive/4.x.zip
 RUN unzip opencv.zip
@@ -31,6 +32,11 @@ RUN cd opencv_build && cmake \
 
 RUN cd opencv_build && make -j && make install
 RUN rm opencv.zip
+
+RUN git clone https://github.com/orocos/orocos_kinematics_dynamics.git
+RUN cd orocos_kinematics_dynamics/orocos_kdl && mkdir build
+RUN cd orocos_kinematics_dynamics/orocos_kdl/build && cmake .. && make -j && make install
+RUN ln -s /usr/include/eigen3/Eigen/ /usr/include/Eigen
 # RUN rm -rf opencv-4.x
 # RUN apk del wget unzip && rm -rf /var/cache/apk/*
 ENTRYPOINT ["tail"]

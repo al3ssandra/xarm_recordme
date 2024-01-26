@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 
 project(MyProject)
 
-include_directories( ${OpenCV_INCLUDE_DIRS} ../orocos_kinematics_dynamics/orocos_kdl/src)
+include_directories( ${OpenCV_INCLUDE_DIRS} /orocos_kinematics_dynamics/orocos_kdl/src)
 
 # set(OpenCV_DIR /opencv_build)
 find_package(OpenCV REQUIRED)
