@@ -8,7 +8,8 @@ include_directories( ${OpenCV_INCLUDE_DIRS} /orocos_kinematics_dynamics/orocos_k
 find_package(OpenCV REQUIRED)
 find_package(orocos_kdl REQUIRED)
 
-add_executable(${PROJECT_NAME} src/ros_kin.cpp)
+add_executable(${PROJECT_NAME} src/trajectory.cpp)
+# add_executable(${PROJECT_NAME} src/ros_kin.cpp)
 # add_executable(${PROJECT_NAME} src/serial.cpp)
 # add_executable(${PROJECT_NAME} src/yolo.cpp)
 

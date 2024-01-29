@@ -8,10 +8,10 @@ create docker image:
 docker build --no-cache -t my-app:1.0 . 2>&1 | tee build.log 
 
 to allow imshow (not best option, see how x11 forwarding docker):
-xhost +local:`docker inspect --format='{{ .Config.Hostname }}' 8a132071e14e`
+xhost +local:`docker inspect --format='{{ .Config.Hostname }}' 572463f31439`
 
 crate container and mount opncvproj folder inside container:
-docker run -d --rm --network host -e DISPLAY=$DISPLAY --device=/dev/ttyACM0 -v /home/alessandra/My-Project/robotic_tripod:/robotic_tripod 8a132071e14e
+docker run -d --rm --network host -e DISPLAY=$DISPLAY --device=/dev/ttyACM0 -v /home/alessandra/My-Project/robotic_tripod:/robotic_tripod 572463f31439
 
 onnx model from:
 https://github.com/onnx/models/blob/main/validated/vision/object_detection_segmentation/tiny-yolov3/model/tiny-yolov3-11.onnx
