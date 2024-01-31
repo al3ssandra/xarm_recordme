@@ -14,6 +14,6 @@ int main() {
     servos[3].ID = 6;
     servos[3].Position = 500;
     uint16_t Time = 1000;
-    move_servos(serialHandle, servos, Num, Time);
+    move_servos(serialHandle, Num, servos, Time);
     return 0;
 }

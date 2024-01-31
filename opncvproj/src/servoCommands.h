@@ -58,7 +58,7 @@ void read_servos(SerialWrapper& serialHandle, uint8_t numservos, RobotServo serv
     }
 }
 
-void move_servos(SerialWrapper& serialHandle, RobotServo servos[], uint8_t numservos, uint16_t Time) {
+void move_servos(SerialWrapper& serialHandle, uint8_t numservos, RobotServo servos[], uint16_t Time) {
 	uint8_t buf[103];    // Establish a buffer
 	if (numservos < 1 || numservos > 32 || !(Time > 0)) {
 		return; // Number of servos cannot be zero or greater than 32, time cannot be zero
