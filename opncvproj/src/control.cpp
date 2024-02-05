@@ -16,24 +16,26 @@ uint16_t deg2serial(double deg) {
 
 int main(int argc, char **argv)
 {
+    // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // Initial setup
     double j3 = 45.0;   // positive clockwise wrt. reference base frame
     double j4 = 90.0;   // positive clockwise wrt. reference base frame
     double j5 = -45.0;  // positive clockwise wrt. reference base frame
     double j6 = 0.0;    // positive anti clockwise wrt. reference base frame
 
-    SerialWrapper serialHandle("/dev/ttyACM0", B9600);
-    uint8_t Num = 4;
-    RobotServo servos[Num];
-    servos[0].ID = 3;
-    servos[0].Position = deg2serial(j3); // 500 + 350;  
-    servos[1].ID = 4;
-    servos[1].Position = deg2serial(-j4); // 500 + 175; // the xarm controller reads joint 4 angle oposite for some reason
-    servos[2].ID = 5;
-    servos[2].Position = deg2serial(j5); // 500 + 175; 
-    servos[3].ID = 6;
-    servos[3].Position = deg2serial(j6); // 500;       
-    uint16_t Time = 1000;
-    move_servos(serialHandle, Num, servos, Time);
+    // SerialWrapper serialHandle("/dev/ttyACM0", B9600);
+    // uint8_t Num = 4;
+    // RobotServo servos[Num];
+    // servos[0].ID = 3;
+    // servos[0].Position = deg2serial(j3); // 500 + 350;  
+    // servos[1].ID = 4;
+    // servos[1].Position = deg2serial(-j4); // 500 + 175; // the xarm controller reads joint 4 angle oposite for some reason
+    // servos[2].ID = 5;
+    // servos[2].Position = deg2serial(j5); // 500 + 175; 
+    // servos[3].ID = 6;
+    // servos[3].Position = deg2serial(j6); // 500;       
+    // uint16_t Time = 1000;
+    // move_servos(serialHandle, Num, servos, Time);
 
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------
     // Setup robot arm config
@@ -63,102 +65,140 @@ int main(int argc, char **argv)
     // Create the frame that will contain the results
     // output is going to be 4x3, the top 3x3 of the matrix is the rotation matrix, and the bottom 1x3 is the translation vector
     KDL::Frame cartpos;    
- 
-    // Calculate forward position kinematics
-    bool kinematics_status;
-    kinematics_status = fksolver.JntToCart(jointpositions,cartpos);
-    if(kinematics_status>=0){
-        std::cout << cartpos << std::endl;
-        printf("%s \n","Succes, thanks KDL!");
-    }else{
-        printf("%s \n","Error: could not calculate forward kinematics :(");
+
+    // -----------------------------------------------------------------------------------------------------------------------------------------------------
+    // Videocapture setup
+
+    cv::Mat frame;
+    cv::VideoCapture capture("/robotic_tripod/opncvproj/videora.mp4");
+    // cv::VideoCapture capture("url/video");
+    if (!capture.isOpened())
+    {
+        std::cerr << "Error opening video file\n";
+        return -1;
     }
 
-//     // -----------------------------------------------------------------------------------------------------------------------------------------------------
+    //  -------------------------------------------------------------------------------------------------------------------------------------------------------
+    // DNN setup
 
-//     std::vector<std::string> class_list = load_class_list();
+    std::vector<std::string> class_list = load_class_list();
 
-//     cv::Mat frame;
-//     cv::VideoCapture capture("/robotic_tripod/opncvproj/videora.mp4");
-//     // cv::VideoCapture capture("url/video");
-//     if (!capture.isOpened())
-//     {
-//         std::cerr << "Error opening video file\n";
-//         return -1;
-//     }
+    bool is_cuda = argc > 1 && strcmp(argv[1], "cuda") == 0;
 
-//     bool is_cuda = argc > 1 && strcmp(argv[1], "cuda") == 0;
+    cv::dnn::Net net;
+    load_net(net, is_cuda);
 
-//     cv::dnn::Net net;
-//     load_net(net, is_cuda);
+    auto start = std::chrono::high_resolution_clock::now();
+    int frame_count = 0;
+    float fps = -1;
+    int total_frames = 0;
 
-//     auto start = std::chrono::high_resolution_clock::now();
-//     int frame_count = 0;
-//     float fps = -1;
-//     int total_frames = 0;
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // Loop
 
-//     while (true)
-//     {
-//         capture.read(frame);
-//         if (frame.empty())
-//         {
-//             std::cout << "End of stream\n";
-//             break;
-//         }
+    while (true)
+    {
+        // Calculate forward position kinematics
+        bool kinematics_status;
+        kinematics_status = fksolver.JntToCart(jointpositions,cartpos);
+        double x_current = cartpos.p[0];
+        double y_current = cartpos.p[1];
+        double z_current = cartpos.p[2];
+        // if(kinematics_status>=0){
+        //     std::cout << cartpos << std::endl;
+        //     std::cout << "x: " << x_current << " y: " << y_current << " z: " << z_current << std::endl;
+        //     printf("%s \n","Succes, thanks KDL!");
+        // }else{
+        //     printf("%s \n","Error: could not calculate forward kinematics :(");
+        // }
 
-//         std::vector<Detection> output;
-//         detect(frame, net, output, class_list);
+        // Get detections
+        capture.read(frame);
+        if (frame.empty())
+        {
+            std::cout << "End of stream\n";
+            break;
+        }
 
-//         frame_count++;
-//         total_frames++;
+        std::vector<Detection> output;
+        detect(frame, net, output, class_list);
 
-//         int detections = output.size();
+        frame_count++;
+        total_frames++;
 
-//         for (int i = 0; i < detections; ++i)
-//         {
+        // Only do stuff if we have detections
+        int detections = output.size();
+        if (detections > 0) {
+            // Sort detections by bbox size
+            // auto sortDetectionsLambda = [] (Detection const& a, Detection const& b) {
+            //     return (a.box.height * a.box.width) > (b.box.height * b.box.width);
+            // };
+            // std::sort(output.begin(), output.end(), sortDetectionsLambda);
 
-//             auto detection = output[i];
-//             auto box = detection.box;
-//             auto classId = detection.class_id;
-//             const auto color = colors[classId % colors.size()];
-//             cv::rectangle(frame, box, color, 3);
+            // Get detection with biggest bbox
+            auto detection = output[0];
 
-//             cv::rectangle(frame, cv::Point(box.x, box.y - 20), cv::Point(box.x + box.width, box.y), color, cv::FILLED);
-//             cv::putText(frame, class_list[classId].c_str(), cv::Point(box.x, box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
-//         }
+            // Setup bbox for display
+            auto box = detection.box;
+            auto classId = detection.class_id;
+            const auto color = colors[classId % colors.size()];
+            cv::rectangle(frame, box, color, 3);
 
-//         if (frame_count >= 30)
-//         {
+            cv::rectangle(frame, cv::Point(box.x, box.y - 20), cv::Point(box.x + box.width, box.y), color, cv::FILLED);
+            cv::putText(frame, class_list[classId].c_str(), cv::Point(box.x, box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
 
-//             auto end = std::chrono::high_resolution_clock::now();
-//             fps = frame_count * 1000.0 / std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+            // Get bbox center
+            float x_bbox_center = box.x + box.width/2;
+            float y_bbox_center = box.y + box.height/2;
 
-//             frame_count = 0;
-//             start = std::chrono::high_resolution_clock::now();
-//         }
+            // std::cout << "bbox sizes" << std::endl;
+            // for (int i = 0; i < detections; ++i)
+            // {
+            //     auto detection = output[i];
+            //     std::cout << detection.box.width * detection.box.height << " ";
+            //     auto box = detection.box;
+            //     auto classId = detection.class_id;
+            //     const auto color = colors[classId % colors.size()];
+            //     cv::rectangle(frame, box, color, 3);
 
-//         if (fps > 0)
-//         {
+            //     cv::rectangle(frame, cv::Point(box.x, box.y - 20), cv::Point(box.x + box.width, box.y), color, cv::FILLED);
+            //     cv::putText(frame, class_list[classId].c_str(), cv::Point(box.x, box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
+            // }
+            // std::cout << std::endl;
+        }
 
-//             std::ostringstream fps_label;
-//             fps_label << std::fixed << std::setprecision(2);
-//             fps_label << "FPS: " << fps;
-//             std::string fps_label_str = fps_label.str();
+        if (frame_count >= 30)
+        {
 
-//             cv::putText(frame, fps_label_str.c_str(), cv::Point(10, 25), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255), 2);
-//         }
+            auto end = std::chrono::high_resolution_clock::now();
+            fps = frame_count * 1000.0 / std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-//         cv::imshow("output", frame);
+            frame_count = 0;
+            start = std::chrono::high_resolution_clock::now();
+        }
 
-//         if (cv::waitKey(1) != -1)
-//         {
-//             capture.release();
-//             std::cout << "finished by user\n";
-//             break;
-//         }
-//     }
+        if (fps > 0)
+        {
+
+            std::ostringstream fps_label;
+            fps_label << std::fixed << std::setprecision(2);
+            fps_label << "FPS: " << fps;
+            std::string fps_label_str = fps_label.str();
+
+            cv::putText(frame, fps_label_str.c_str(), cv::Point(10, 25), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255), 2);
+        }
+
+        cv::imshow("output", frame);
+
+        if (cv::waitKey(1) != -1)
+        {
+            capture.release();
+            std::cout << "finished by user\n";
+            break;
+        }
+    }
 
 //     std::cout << "Total frames: " << total_frames << "\n";
 
-//     return 0;
+    return 0;
 }
