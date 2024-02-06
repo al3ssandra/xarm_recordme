@@ -1,3 +1,5 @@
+#include <math.h>
+
 #include <kdl/chain.hpp>
 #include <kdl/chainfksolver.hpp>
 #include <kdl/chainfksolverpos_recursive.hpp>
@@ -18,24 +20,29 @@ int main(int argc, char **argv)
 {
     // ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
     // Initial setup
+
+    float shift_threshold = 100; // if bbox shift from center of image is greater than this threshold (pixels) we do stuff. this is to avoid moving when is noise
+    double horizontal_fov = 57 * KDL::PI / 180; // horizontal field or angle of view (rads) of front camera when phone is vertical
+    double vertical_fov = 72 * KDL::PI / 180; // vertical field or angle of view (rads) of front camera when phone is vertical
     double j3 = 45.0;   // positive clockwise wrt. reference base frame
     double j4 = 90.0;   // positive clockwise wrt. reference base frame
     double j5 = -45.0;  // positive clockwise wrt. reference base frame
     double j6 = 0.0;    // positive anti clockwise wrt. reference base frame
 
-    // SerialWrapper serialHandle("/dev/ttyACM0", B9600);
-    // uint8_t Num = 4;
-    // RobotServo servos[Num];
-    // servos[0].ID = 3;
-    // servos[0].Position = deg2serial(j3); // 500 + 350;  
-    // servos[1].ID = 4;
-    // servos[1].Position = deg2serial(-j4); // 500 + 175; // the xarm controller reads joint 4 angle oposite for some reason
-    // servos[2].ID = 5;
-    // servos[2].Position = deg2serial(j5); // 500 + 175; 
-    // servos[3].ID = 6;
-    // servos[3].Position = deg2serial(j6); // 500;       
-    // uint16_t Time = 1000;
-    // move_servos(serialHandle, Num, servos, Time);
+    // Move robot servos to initial config
+    SerialWrapper serialHandle("/dev/ttyACM0", B9600);
+    uint8_t Num = 4;
+    RobotServo servos[Num];
+    servos[0].ID = 3;
+    servos[0].Position = deg2serial(j3); // 500 + 350;  
+    servos[1].ID = 4;
+    servos[1].Position = deg2serial(-j4); // 500 + 175; // the xarm controller reads joint 4 angle oposite for some reason
+    servos[2].ID = 5;
+    servos[2].Position = deg2serial(j5); // 500 + 175; 
+    servos[3].ID = 6;
+    servos[3].Position = deg2serial(j6); // 500;       
+    uint16_t Time = 1000;
+    move_servos(serialHandle, Num, servos, Time);
 
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------
     // Setup robot arm config
@@ -50,6 +57,7 @@ int main(int argc, char **argv)
 
     // Create solver based on kinematic chain
     KDL::ChainFkSolverPos_recursive fksolver = KDL::ChainFkSolverPos_recursive(chain);
+    KDL::ChainIkSolverVel_pinv iksolverv(chain);//Inverse velocity solver
 
     // Create joint array
     unsigned int nj = chain.getNrOfJoints();
@@ -64,14 +72,15 @@ int main(int argc, char **argv)
 
     // Create the frame that will contain the results
     // output is going to be 4x3, the top 3x3 of the matrix is the rotation matrix, and the bottom 1x3 is the translation vector
-    KDL::Frame cartpos;    
+    KDL::Frame config_current;
+    KDL::JntArray delta_joints(nj);    
 
     // -----------------------------------------------------------------------------------------------------------------------------------------------------
     // Videocapture setup
 
     cv::Mat frame;
-    cv::VideoCapture capture("/robotic_tripod/opncvproj/videora.mp4");
-    // cv::VideoCapture capture("url/video");
+    // cv::VideoCapture capture("/robotic_tripod/opncvproj/videora.mp4");
+    cv::VideoCapture capture("https://192.168.0.248:8080//video");
     if (!capture.isOpened())
     {
         std::cerr << "Error opening video file\n";
@@ -100,12 +109,12 @@ int main(int argc, char **argv)
     {
         // Calculate forward position kinematics
         bool kinematics_status;
-        kinematics_status = fksolver.JntToCart(jointpositions,cartpos);
-        double x_current = cartpos.p[0];
-        double y_current = cartpos.p[1];
-        double z_current = cartpos.p[2];
+        kinematics_status = fksolver.JntToCart(jointpositions,config_current);
+        double x_current = config_current.p[0];
+        double y_current = config_current.p[1];
+        double z_current = config_current.p[2];
         // if(kinematics_status>=0){
-        //     std::cout << cartpos << std::endl;
+        //     std::cout << config_current << std::endl;
         //     std::cout << "x: " << x_current << " y: " << y_current << " z: " << z_current << std::endl;
         //     printf("%s \n","Succes, thanks KDL!");
         // }else{
@@ -151,20 +160,57 @@ int main(int argc, char **argv)
             float x_bbox_center = box.x + box.width/2;
             float y_bbox_center = box.y + box.height/2;
 
-            // std::cout << "bbox sizes" << std::endl;
-            // for (int i = 0; i < detections; ++i)
-            // {
-            //     auto detection = output[i];
-            //     std::cout << detection.box.width * detection.box.height << " ";
-            //     auto box = detection.box;
-            //     auto classId = detection.class_id;
-            //     const auto color = colors[classId % colors.size()];
-            //     cv::rectangle(frame, box, color, 3);
+            // Get image center
+            float x_img_center = frame.cols/2;
+            float y_img_center = frame.rows/2;
 
-            //     cv::rectangle(frame, cv::Point(box.x, box.y - 20), cv::Point(box.x + box.width, box.y), color, cv::FILLED);
-            //     cv::putText(frame, class_list[classId].c_str(), cv::Point(box.x, box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
-            // }
-            // std::cout << std::endl;
+            // Get shift
+            float x_shift = x_bbox_center - x_img_center;
+            float y_shift = y_bbox_center - y_img_center;
+            float module_shift = std::sqrt(pow(x_shift,2) + pow(y_shift,2));
+
+            // If shift is bigger than threshold (to avoid noise)
+            if (module_shift > shift_threshold) {
+                // Calculate shift horizontal and vertical angles
+                float delta_angle_x = x_shift * horizontal_fov / frame.cols; // horizontal shift angle in rads 
+                float delta_angle_y = y_shift * vertical_fov / frame.rows; // vertical shift angle in rads 
+                std::cout << "delta_angle_x: " << delta_angle_x << std::endl;
+                std::cout << "delta_angle_y: " << delta_angle_y << std::endl;
+
+                // Calculate next end effector frame origin x_next,y_next,z_next coordinates
+                float d = std::sqrt(pow(x_current,2) + pow(y_current,2));
+                float current_xy_angle = std::atan(y_current/x_current); //xy is the plane at the base of robot, and this is end effector frame origin angle on that plane
+                float next_xy_angle = current_xy_angle + delta_angle_x; // next angle is the current end effector origin fx angle + the horizontal shift angle
+                float x_next = d * std::cos(next_xy_angle); // get next x coord
+                float y_next = d * std::sin(next_xy_angle); // get next y coord
+                float current_elevation_angle = std::atan(z_current/d); // the current elevation angle of the end effector origin over the xy plane
+                float z_next = d * std::tan(current_elevation_angle - delta_angle_y); // next angle is the current end effector elevation + the vertical shift angle
+                double dz = z_next - z_current;
+
+                // Get next end effector config matrix by first rotating over z axis an angle delta horizontal, and then translating directly up or down
+                KDL::Rotation R = KDL::Rotation::RotZ(delta_angle_x);
+                KDL::Vector p(0.0, 0.0, dz);
+                KDL::Frame T(R, p);
+                // Premultiply current frame by T to represent a transformation with respect to base frame
+                KDL::Frame config_next = T * config_current;
+
+                // Get joints angles from frame config using inverse kinematics
+                KDL::Twist twist = KDL::diff(config_current, config_next);
+                int ret = iksolverv.CartToJnt(jointpositions,twist,delta_joints);
+                KDL::Add(jointpositions,delta_joints,jointpositions);
+
+                // Move robot servos
+                servos[0].ID = 3;
+                servos[0].Position = deg2serial(jointpositions(3) * 180 / KDL::PI); // 500 + 350;  
+                servos[1].ID = 4;
+                servos[1].Position = deg2serial(-jointpositions(2) * 180 / KDL::PI); // 500 + 175; // the xarm controller reads joint 4 angle oposite for some reason
+                servos[2].ID = 5;
+                servos[2].Position = deg2serial(jointpositions(1) * 180 / KDL::PI); // 500 + 175; 
+                servos[3].ID = 6;
+                servos[3].Position = deg2serial(jointpositions(0) * 180 / KDL::PI); // 500;       
+                uint16_t Time = 1000;
+                move_servos(serialHandle, Num, servos, Time);
+            }
         }
 
         if (frame_count >= 30)
