@@ -14,7 +14,7 @@
 #include <servoCommands.h>
 #include <yolo.h>
 
-const float shift_threshold = 100; // if bbox shift from center of image is greater than this threshold (pixels) we do stuff. this is to avoid moving when is noise
+const double shift_threshold = 100; // if bbox shift from center of image is greater than this threshold (pixels) we do stuff. this is to avoid moving when is noise
 const double horizontal_fov = 57 * KDL::PI / 180; // horizontal field or angle of view (rads) of front camera when phone is vertical
 const double vertical_fov = 72 * KDL::PI / 180; // vertical field or angle of view (rads) of front camera when phone is vertical
 const double j3 = 45.0;   // positive clockwise wrt. reference base frame
@@ -48,12 +48,66 @@ uint16_t deg2serial(double deg) {
     }
 }
 
+int getNextJoints(KDL::ChainIkSolverVel_wdls& iksolverv, KDL::JntArray& jointpositions, const KDL::Twist& twist, KDL::JntArray& delta_joints, const unsigned int nj){
+    Eigen::MatrixXd Mq = Eigen::MatrixXd::Identity(nj, nj);
+    std::cout << Mq << std::endl;
+    KDL::JntArray jointpositions_tmp(nj);
+    int ret, i;
+    bool flag;
+    double small_w = 0.000001;
+
+    while(true) {
+        flag = true;
+        ret = iksolverv.CartToJnt(jointpositions,twist,delta_joints);
+        std::cout << "delta_joints: " << delta_joints(0) * 180 / KDL::PI << " " << delta_joints(1) * 180 / KDL::PI << " " << delta_joints(2) * 180 / KDL::PI << " " << delta_joints(3) * 180 / KDL::PI << std::endl;
+        std::cout << "jointpositions: " << jointpositions(0) << " " << jointpositions(1) << " " << jointpositions(2) << " " << jointpositions(3) << std::endl;
+        if (ret >= 0){
+            KDL::Add(jointpositions,delta_joints,jointpositions_tmp);
+            std::cout << "jointpositions_tmp: " << jointpositions_tmp(0) << " " << jointpositions_tmp(1) << " " << jointpositions_tmp(2) << " " << jointpositions_tmp(3) << std::endl;
+            for(i=0; i<nj; i++){
+                if((jointpositions_tmp(i) * 180/KDL::PI > 90) || (jointpositions_tmp(i) * 180/KDL::PI < -90)) {
+                    std::cout << "joint " << i << " is out of bound" << std::endl;
+                    if (Mq(i,i) == small_w) {
+                        std::cerr << "It's trying to violate joint limit for joint " << i << "\n";
+                        return -20;
+                    }
+                    else{
+                        std::cout << "setting Mq(" << i << ") to " << small_w << std::endl;
+                        Mq(i,i) = small_w;
+                        std::cout << Mq << std::endl;
+                        iksolverv.setWeightJS(Mq);
+                        flag = false;
+                        break;
+                    }
+                }
+            }
+            if (flag) {
+                std::cout << "leaving loop" << std::endl;
+                jointpositions = jointpositions_tmp;
+                return ret;
+            }
+        }
+        else{
+            std::cerr << "Couldn't find inverse kinematics solution\n";
+            return ret;
+        }
+    }
+}
+
+// void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_wdls& iksolverv, const cv::Rect& box, const cv::Mat& frame, const unsigned int nj, KDL::JntArray& jointpositions){
 void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_pinv& iksolverv, const cv::Rect& box, const cv::Mat& frame, const unsigned int nj, KDL::JntArray& jointpositions){
     // Calculate forward position kinematics
     bool kinematics_status;
     KDL::Frame config_current;
     KDL::JntArray delta_joints(nj);
+    KDL::JntArray joint_limits(nj);
+    joint_limits(0) = 120.0 * KDL::PI / 180.0;
+    joint_limits(1) = 90.0 * KDL::PI / 180.0;
+    joint_limits(2) = 120.0 * KDL::PI / 180.0;
+    joint_limits(3) = 120.0 * KDL::PI / 180.0;
+    double max_joint_speed = 0.5;
     RobotServo servos[Num];
+    int i;
 
     kinematics_status = fksolver.JntToCart(jointpositions,config_current);
     double x_current = config_current.p[0];
@@ -61,34 +115,34 @@ void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_
     double z_current = config_current.p[2];
 
     // Get bbox center
-    float x_bbox_center = box.x + box.width/2;
-    float y_bbox_center = box.y + box.height/2;
+    double x_bbox_center = box.x + box.width/2;
+    double y_bbox_center = box.y + box.height/2;
 
     // Get image center
-    float x_img_center = frame.cols/2;
-    float y_img_center = frame.rows/2;
+    double x_img_center = frame.cols/2;
+    double y_img_center = frame.rows/2;
 
     // Get shift
-    float x_shift = x_bbox_center - x_img_center;
-    float y_shift = y_bbox_center - y_img_center;
-    float module_shift = std::sqrt(pow(x_shift,2) + pow(y_shift,2));
+    double x_shift = x_bbox_center - x_img_center;
+    double y_shift = y_bbox_center - y_img_center;
+    double module_shift = std::sqrt(pow(x_shift,2) + pow(y_shift,2));
 
     // If shift is bigger than threshold (to avoid noise)
     if (module_shift > shift_threshold) {
         // Calculate shift horizontal and vertical angles
-        float delta_angle_x = x_shift * horizontal_fov / frame.cols; // horizontal shift angle in rads 
-        float delta_angle_y = y_shift * vertical_fov / frame.rows; // vertical shift angle in rads 
-        std::cout << "delta_angle_x: " << delta_angle_x << std::endl;
-        std::cout << "delta_angle_y: " << delta_angle_y << std::endl;
+        double delta_angle_x = x_shift * horizontal_fov / frame.cols; // horizontal shift angle in rads 
+        double delta_angle_y = y_shift * vertical_fov / frame.rows; // vertical shift angle in rads 
+        std::cout << "delta_angle_x: " << delta_angle_x * 180 / KDL::PI << std::endl;
+        std::cout << "delta_angle_y: " << delta_angle_y * 180 / KDL::PI << std::endl;
 
         // Calculate next end effector frame origin x_next,y_next,z_next coordinates
-        float d = std::sqrt(pow(x_current,2) + pow(y_current,2));
-        float current_xy_angle = std::atan2(y_current, x_current); //xy is the plane at the base of robot, and this is end effector frame origin angle on that plane
-        float next_xy_angle = current_xy_angle + delta_angle_x; // next angle is the current end effector origin fx angle + the horizontal shift angle
-        float x_next = d * std::cos(next_xy_angle); // get next x coord
-        float y_next = d * std::sin(next_xy_angle); // get next y coord
-        float current_elevation_angle = std::atan2(z_current, d); // the current elevation angle of the end effector origin over the xy plane
-        float z_next = d * std::tan(current_elevation_angle - delta_angle_y); // next angle is the current end effector elevation + the vertical shift angle
+        double d = std::sqrt(pow(x_current,2) + pow(y_current,2));
+        double current_xy_angle = std::atan2(y_current, x_current); //xy is the plane at the base of robot, and this is end effector frame origin angle on that plane
+        double next_xy_angle = current_xy_angle - delta_angle_x; // next angle is the current end effector origin fx angle + the horizontal shift angle
+        double x_next = d * std::cos(next_xy_angle); // get next x coord
+        double y_next = d * std::sin(next_xy_angle); // get next y coord
+        double current_elevation_angle = std::atan(z_current/d); // the current elevation angle of the end effector origin over the xy plane
+        double z_next = d * std::tan(current_elevation_angle - delta_angle_y); // next angle is the current end effector elevation + the vertical shift angle
         double dz = z_next - z_current;
 
         std::cout << "dz: " << dz << std::endl;
@@ -97,10 +151,20 @@ void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_
         if (d_cm < 0.02) {
             // Get next end effector config matrix by first rotating over z axis an angle delta horizontal, and then translating directly up or down
             KDL::Rotation R = KDL::Rotation::RotZ(-delta_angle_x);
+            // KDL::Rotation R = KDL::Rotation::RotZ(0.0);
             KDL::Vector p(0.0, 0.0, dz);
             KDL::Frame T(R, p);
             // Premultiply current frame by T to represent a transformation with respect to base frame
             KDL::Frame config_next = T * config_current;
+            // // Postmultiply current frame by T roty to represent a transformation with respect to body frame
+            // KDL::Vector zAxisDirection = config_next.M.UnitZ();
+            // double y_rot = std::asin(zAxisDirection[2]); // rotation angle to have the z axis horizontal
+            // R = KDL::Rotation::RotY(y_rot);
+            // p[2] = 0.0;
+            // T.p = p;
+            // T.M = R;
+            // config_next = config_next * T;
+            // std::cout << "y_rot: " << y_rot * 180 / KDL::PI << std::endl;
 
             // Get joints angles from frame config using inverse kinematics
             KDL::Twist twist = KDL::diff(config_current, config_next);
@@ -109,7 +173,20 @@ void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_
             // If ret < 0 something went wrong
             std::cout << "ret: " << ret << std::endl;
             if(ret >= 0){
+                for(i=0; i<nj; i++){
+                    if (std::abs(delta_joints(i)) > max_joint_speed){
+                        auto s = delta_joints(i);
+                        delta_joints(i) = s * max_joint_speed / std::abs(s);
+                    }
+                }
                 KDL::Add(jointpositions,delta_joints,jointpositions);
+                jointpositions(3) = jointpositions(1) + jointpositions(2); // make sure camera always stays vertical
+                for(i=0; i<nj; i++){
+                    if (std::abs(jointpositions(i)) > joint_limits(i)){
+                        auto a = jointpositions(i);
+                        jointpositions(i) = a * joint_limits(i) / std::abs(a);
+                    }
+                }                
                 std::cout << "joint 6 (base): " << jointpositions(0) * 180 / KDL::PI << std::endl;
                 std::cout << "joint 5 : " << jointpositions(1) * 180 / KDL::PI << std::endl;
                 std::cout << "joint 4 : " << jointpositions(2) * 180 / KDL::PI << std::endl;
@@ -130,56 +207,12 @@ void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_
                 std::cout << "servo 3 (tip): " << servos[0].Position << std::endl;
 
                 move_servos(serialHandle, Num, servos, Time);
-                std::this_thread::sleep_for(std::chrono::milliseconds(Time));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10000));
             }
         }
     }
     isBusy.store(false);
 }
-
-// int getNextJoints(KDL::ChainIkSolverVel_wdls& iksolverv, KDL::JntArray& jointpositions, const KDL::Twist& twist, KDL::JntArray& delta_joints, const unsigned int nj){
-//     Eigen::MatrixXd Mq = Eigen::MatrixXd::Identity(nj, nj);
-//     KDL::JntArray jointpositions_tmp(nj);
-//     int ret, i;
-//     bool flag;
-//     double small_w = 0.000001;
-
-//     while(true) {
-//         flag = true;
-//         ret = iksolverv.CartToJnt(jointpositions,twist,delta_joints);
-//         std::cout << "delta_joints: " << delta_joints(0) << " " << delta_joints(1) << " " << delta_joints(2) << " " << delta_joints(3) << std::endl;
-//         std::cout << "jointpositions: " << jointpositions(0) << " " << jointpositions(1) << " " << jointpositions(2) << " " << jointpositions(3) << std::endl;
-//         if (ret >= 0){
-//             KDL::Add(jointpositions,delta_joints,jointpositions_tmp);
-//             std::cout << "jointpositions_tmp: " << jointpositions_tmp(0) << " " << jointpositions_tmp(1) << " " << jointpositions_tmp(2) << " " << jointpositions_tmp(3) << std::endl;
-//             for(i=0; i<nj; i++){
-//                 if((jointpositions_tmp(i) * 180/KDL::PI > 120) || (jointpositions_tmp(i) * 180/KDL::PI < -120)) {
-//                     std::cout << "joint " << i << " is out of bound" << std::endl;
-//                     if (Mq(i,i) == small_w) {
-//                         std::cerr << "It's trying to violate joint limit for joint " << i << "\n";
-//                         return -20;
-//                     }
-//                     else{
-//                         std::cout << "setting Mq(" << i << ") to " << small_w << std::endl;
-//                         Mq(i,i) = small_w;
-//                         iksolverv.setWeightJS(Mq);
-//                         flag = false;
-//                         break;
-//                     }
-//                 }
-//             }
-//             if (flag) {
-//                 std::cout << "leaving loop" << std::endl;
-//                 jointpositions = jointpositions_tmp;
-//                 return ret;
-//             }
-//         }
-//         else{
-//             std::cerr << "Couldn't find inverse kinematics solution\n";
-//             return ret;
-//         }
-//     }
-// }
 
 int main(int argc, char **argv)
 {
@@ -199,6 +232,7 @@ int main(int argc, char **argv)
     servos[3].ID = 6;
     servos[3].Position = deg2serial(j6); // 500;       
     move_servos(serialHandle, Num, servos, Time);
+    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------
     // Setup robot arm config
@@ -213,8 +247,8 @@ int main(int argc, char **argv)
 
     // Create solver based on kinematic chain
     KDL::ChainFkSolverPos_recursive fksolver(chain);
-    KDL::ChainIkSolverVel_pinv iksolverv(chain);//Inverse velocity solver
-    // KDL::ChainIkSolverVel_wdls iksolverv(chain);//Inverse velocity solver
+    KDL::ChainIkSolverVel_pinv iksolverv(chain, 0.001);//Inverse velocity solver
+    // KDL::ChainIkSolverVel_wdls iksolverv(chain, 0.001);//Inverse velocity solver
 
     // Create joint array
     unsigned int nj = chain.getNrOfJoints();
