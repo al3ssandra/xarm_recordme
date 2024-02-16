@@ -14,7 +14,7 @@
 #include <servoCommands.h>
 #include <yolo.h>
 
-const double shift_threshold = 100; // if bbox shift from center of image is greater than this threshold (pixels) we do stuff. this is to avoid moving when is noise
+const double shift_threshold = 50; // if bbox shift from center of image is greater than this threshold (pixels) we do stuff. this is to avoid moving when is noise
 const double horizontal_fov = 57 * KDL::PI / 180; // horizontal field or angle of view (rads) of front camera when phone is vertical
 const double vertical_fov = 72 * KDL::PI / 180; // vertical field or angle of view (rads) of front camera when phone is vertical
 const double j3 = 45.0;   // positive clockwise wrt. reference base frame
@@ -22,9 +22,9 @@ const double j4 = 90.0;   // positive clockwise wrt. reference base frame
 const double j5 = -45.0;  // positive clockwise wrt. reference base frame
 const double j6 = 0.0;    // positive anti clockwise wrt. reference base frame
 
-SerialWrapper serialHandle("/dev/ttyACM0", B9600);
 const uint8_t Num = 4;
 const uint16_t Time = 1000; //milliseconds
+const int detect_rate = 20;
 
 std::atomic<bool> isBusy(false);
 
@@ -37,15 +37,7 @@ void signalHandler(int signal) {
 
 // Robot joints angles go from -120 to 120 wrt. previous link. deg is in degrees, not rads.
 uint16_t deg2serial(double deg) {
-    if(deg < -120){
-        return 500 + (1000/240) * (-120);
-    }
-    else if (deg > 120) {
-        return 500 + (1000/240) * 120;
-    }
-    else{
         return 500 + (1000/240) * deg;
-    }
 }
 
 int getNextJoints(KDL::ChainIkSolverVel_wdls& iksolverv, KDL::JntArray& jointpositions, const KDL::Twist& twist, KDL::JntArray& delta_joints, const unsigned int nj){
@@ -95,7 +87,7 @@ int getNextJoints(KDL::ChainIkSolverVel_wdls& iksolverv, KDL::JntArray& jointpos
 }
 
 // void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_wdls& iksolverv, const cv::Rect& box, const cv::Mat& frame, const unsigned int nj, KDL::JntArray& jointpositions){
-void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_pinv& iksolverv, const cv::Rect& box, const cv::Mat& frame, const unsigned int nj, KDL::JntArray& jointpositions){
+void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_pinv& iksolverv, const cv::Rect& box, const cv::Mat& frame, const unsigned int nj, KDL::JntArray& jointpositions, SerialWrapper& serialHandle){
     // Calculate forward position kinematics
     bool kinematics_status;
     KDL::Frame config_current;
@@ -105,7 +97,7 @@ void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_
     joint_limits(1) = 90.0 * KDL::PI / 180.0;
     joint_limits(2) = 120.0 * KDL::PI / 180.0;
     joint_limits(3) = 120.0 * KDL::PI / 180.0;
-    double max_joint_speed = 0.5;
+    double max_joint_speed = 1.5;
     RobotServo servos[Num];
     int i;
 
@@ -148,69 +140,65 @@ void moveRobot(KDL::ChainFkSolverPos_recursive& fksolver, KDL::ChainIkSolverVel_
         std::cout << "dz: " << dz << std::endl;
         double d_cm = std::sqrt(pow(x_next - x_current,2) + pow(y_next - y_current,2) + pow(z_next - z_current,2));
         std::cout << "delta centimeters: " << d_cm << std::endl;
-        if (d_cm < 0.02) {
-            // Get next end effector config matrix by first rotating over z axis an angle delta horizontal, and then translating directly up or down
-            KDL::Rotation R = KDL::Rotation::RotZ(-delta_angle_x);
-            // KDL::Rotation R = KDL::Rotation::RotZ(0.0);
-            KDL::Vector p(0.0, 0.0, dz);
-            KDL::Frame T(R, p);
-            // Premultiply current frame by T to represent a transformation with respect to base frame
-            KDL::Frame config_next = T * config_current;
-            // // Postmultiply current frame by T roty to represent a transformation with respect to body frame
-            // KDL::Vector zAxisDirection = config_next.M.UnitZ();
-            // double y_rot = std::asin(zAxisDirection[2]); // rotation angle to have the z axis horizontal
-            // R = KDL::Rotation::RotY(y_rot);
-            // p[2] = 0.0;
-            // T.p = p;
-            // T.M = R;
-            // config_next = config_next * T;
-            // std::cout << "y_rot: " << y_rot * 180 / KDL::PI << std::endl;
+       
+        // Get next end effector config matrix by first rotating over z axis an angle delta horizontal, and then rotating up or down
+        KDL::Rotation R = KDL::Rotation::RotZ(-delta_angle_x);
+        // KDL::Rotation R = KDL::Rotation::RotZ(0.0);
+        // KDL::Vector p(0.0, 0.0, dz);
+        KDL::Vector p(0.0, 0.0, 0.0);
+        KDL::Frame T(R, p);
+        // Premultiply current frame by T to represent a transformation with respect to base frame
+        KDL::Frame config_next = T * config_current;
+        // // Postmultiply current frame by T roty to represent a transformation with respect to body frame
+        KDL::Rotation R2 = KDL::Rotation::RotY(delta_angle_y);
+        KDL::Frame T2(R2, p);
+        config_next = config_next * T2;
 
-            // Get joints angles from frame config using inverse kinematics
-            KDL::Twist twist = KDL::diff(config_current, config_next);
-            // int ret = getNextJoints(iksolverv, jointpositions, twist, delta_joints, nj);
-            int ret = iksolverv.CartToJnt(jointpositions,twist,delta_joints);
-            // If ret < 0 something went wrong
-            std::cout << "ret: " << ret << std::endl;
-            if(ret >= 0){
-                for(i=0; i<nj; i++){
-                    if (std::abs(delta_joints(i)) > max_joint_speed){
-                        auto s = delta_joints(i);
-                        delta_joints(i) = s * max_joint_speed / std::abs(s);
-                    }
+        // Get joints angles from frame config using inverse kinematics
+        KDL::Twist twist = KDL::diff(config_current, config_next);
+        // int ret = getNextJoints(iksolverv, jointpositions, twist, delta_joints, nj);
+        int ret = iksolverv.CartToJnt(jointpositions,twist,delta_joints);
+        // If ret < 0 something went wrong
+        std::cout << "ret: " << ret << std::endl;
+        if(ret >= 0){
+            for(i=0; i<nj; i++){
+                if (std::abs(delta_joints(i)) > max_joint_speed){
+                    auto s = delta_joints(i);
+                    delta_joints(i) = s * max_joint_speed / std::abs(s);
                 }
-                KDL::Add(jointpositions,delta_joints,jointpositions);
-                jointpositions(3) = jointpositions(1) + jointpositions(2); // make sure camera always stays vertical
-                for(i=0; i<nj; i++){
-                    if (std::abs(jointpositions(i)) > joint_limits(i)){
-                        auto a = jointpositions(i);
-                        jointpositions(i) = a * joint_limits(i) / std::abs(a);
-                    }
-                }                
-                std::cout << "joint 6 (base): " << jointpositions(0) * 180 / KDL::PI << std::endl;
-                std::cout << "joint 5 : " << jointpositions(1) * 180 / KDL::PI << std::endl;
-                std::cout << "joint 4 : " << jointpositions(2) * 180 / KDL::PI << std::endl;
-                std::cout << "joint 3 (tip): " << jointpositions(3) * 180 / KDL::PI << std::endl;
-
-                // Move robot servos
-                servos[0].ID = 3;
-                servos[0].Position = deg2serial(jointpositions(3) * 180 / KDL::PI); // 500 + 350;  
-                servos[1].ID = 4;
-                servos[1].Position = deg2serial(-jointpositions(2) * 180 / KDL::PI); // 500 + 175; // the xarm controller reads joint 4 angle oposite for some reason
-                servos[2].ID = 5;
-                servos[2].Position = deg2serial(jointpositions(1) * 180 / KDL::PI); // 500 + 175; 
-                servos[3].ID = 6;
-                servos[3].Position = deg2serial(jointpositions(0) * 180 / KDL::PI); // 500;       
-                std::cout << "servo 6 (base): " << servos[3].Position << std::endl;
-                std::cout << "servo 5 : " << servos[2].Position << std::endl;
-                std::cout << "servo 4 : " << servos[1].Position << std::endl;
-                std::cout << "servo 3 (tip): " << servos[0].Position << std::endl;
-
-                move_servos(serialHandle, Num, servos, Time);
-                std::this_thread::sleep_for(std::chrono::milliseconds(10000));
             }
+            KDL::Add(jointpositions,delta_joints,jointpositions);
+            // jointpositions(3) = jointpositions(1) + jointpositions(2); // make sure camera always stays vertical
+            for(i=0; i<nj; i++){
+                if (std::abs(jointpositions(i)) > joint_limits(i)){
+                    auto a = jointpositions(i);
+                    jointpositions(i) = a * joint_limits(i) / std::abs(a);
+                }
+            }                
+            std::cout << "joint 6 (base): " << jointpositions(0) * 180 / KDL::PI << std::endl;
+            std::cout << "joint 5 : " << jointpositions(1) * 180 / KDL::PI << std::endl;
+            std::cout << "joint 4 : " << jointpositions(2) * 180 / KDL::PI << std::endl;
+            std::cout << "joint 3 (tip): " << jointpositions(3) * 180 / KDL::PI << std::endl;
+
+            // Move robot servos
+            servos[0].ID = 3;
+            servos[0].Position = deg2serial(jointpositions(3) * 180 / KDL::PI); // 500 + 350;  
+            servos[1].ID = 4;
+            servos[1].Position = deg2serial(-jointpositions(2) * 180 / KDL::PI); // 500 + 175; // the xarm controller reads joint 4 angle oposite for some reason
+            servos[2].ID = 5;
+            servos[2].Position = deg2serial(jointpositions(1) * 180 / KDL::PI); // 500 + 175; 
+            servos[3].ID = 6;
+            servos[3].Position = deg2serial(jointpositions(0) * 180 / KDL::PI); // 500;       
+            std::cout << "servo 6 (base): " << servos[3].Position << std::endl;
+            std::cout << "servo 5 : " << servos[2].Position << std::endl;
+            std::cout << "servo 4 : " << servos[1].Position << std::endl;
+            std::cout << "servo 3 (tip): " << servos[0].Position << std::endl;
+
+            move_servos(serialHandle, Num, servos, Time);
+            // std::this_thread::sleep_for(std::chrono::milliseconds(Time));
         }
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds(Time));
     isBusy.store(false);
 }
 
@@ -222,6 +210,7 @@ int main(int argc, char **argv)
     // Initial setup
 
     // Move robot servos to initial config
+    SerialWrapper serialHandle("/dev/ttyACM0", B9600);
     RobotServo servos[Num];
     servos[0].ID = 3;
     servos[0].Position = deg2serial(j3); // 500 + 350;  
@@ -305,63 +294,64 @@ int main(int argc, char **argv)
             std::cout << "End of stream\n";
             break;
         }
-
-        std::vector<Detection> output;
-        detect(frame, net, output, class_list);
-
         frame_count++;
         total_frames++;
 
-        // Only do stuff if we have detections
-        int detections = output.size();
-        if (detections > 0) {
-            // Sort detections by bbox size
-            // auto sortDetectionsLambda = [] (Detection const& a, Detection const& b) {
-            //     return (a.box.height * a.box.width) > (b.box.height * b.box.width);
-            // };
-            // std::sort(output.begin(), output.end(), sortDetectionsLambda);
+        if ((!isBusy.load()) && (frame_count >= 30)){
+            std::vector<Detection> output;
+            detect(frame, net, output, class_list);
 
-            // Get detection with biggest bbox
-            auto detection = output[0];
+            // Only do stuff if we have detections
+            int detections = output.size();
+            if (detections > 0) {
+                // Sort detections by bbox size
+                // auto sortDetectionsLambda = [] (Detection const& a, Detection const& b) {
+                //     return (a.box.height * a.box.width) > (b.box.height * b.box.width);
+                // };
+                // std::sort(output.begin(), output.end(), sortDetectionsLambda);
 
-            // Setup bbox for display
-            auto box = detection.box;
-            auto classId = detection.class_id;
-            const auto color = colors[classId % colors.size()];
-            cv::rectangle(frame, box, color, 3);
+                // Get detection with biggest bbox
+                auto detection = output[0];
 
-            cv::rectangle(frame, cv::Point(box.x, box.y - 20), cv::Point(box.x + box.width, box.y), color, cv::FILLED);
-            cv::putText(frame, class_list[classId].c_str(), cv::Point(box.x, box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
+                // Setup bbox for display
+                auto box = detection.box;
+                auto classId = detection.class_id;
+                const auto color = colors[classId % colors.size()];
+                cv::rectangle(frame, box, color, 3);
 
-            if (frame_count >= 30)
-            {
+                cv::rectangle(frame, cv::Point(box.x, box.y - 20), cv::Point(box.x + box.width, box.y), color, cv::FILLED);
+                cv::putText(frame, class_list[classId].c_str(), cv::Point(box.x, box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
 
-                auto end = std::chrono::high_resolution_clock::now();
-                fps = frame_count * 1000.0 / std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+                if (frame_count >= 30)
+                {
 
-                frame_count = 0;
-                start = std::chrono::high_resolution_clock::now();
-            }
+                    auto end = std::chrono::high_resolution_clock::now();
+                    fps = frame_count * 1000.0 / std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
 
-            if (fps > 0)
-            {
+                    frame_count = 0;
+                    start = std::chrono::high_resolution_clock::now();
+                }
 
-                std::ostringstream fps_label;
-                fps_label << std::fixed << std::setprecision(2);
-                fps_label << "FPS: " << fps;
-                std::string fps_label_str = fps_label.str();
+                if (fps > 0)
+                {
 
-                cv::putText(frame, fps_label_str.c_str(), cv::Point(10, 25), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255), 2);
-            }
+                    std::ostringstream fps_label;
+                    fps_label << std::fixed << std::setprecision(2);
+                    fps_label << "FPS: " << fps;
+                    std::string fps_label_str = fps_label.str();
 
-            if (!isBusy.load()) {
+                    cv::putText(frame, fps_label_str.c_str(), cv::Point(10, 25), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255), 2);
+                }
+
+                // if (!isBusy.load()) {
                 // Start a new thread for long calculations
-                std::thread calculationThread(moveRobot, std::ref(fksolver), std::ref(iksolverv), std::ref(box), std::ref(frame), nj, std::ref(jointpositions));
+                std::thread calculationThread(moveRobot, std::ref(fksolver), std::ref(iksolverv), std::ref(box), std::ref(frame), nj, std::ref(jointpositions), std::ref(serialHandle));
                 calculationThread.detach(); // Detach the thread to run independently
                 isBusy.store(true);
             }
         }
         cv::imshow("output", frame);
+        // std::cout << "can press esc" << std::endl;
         if (cv::waitKey(1) != -1)
         {
             capture.release();
