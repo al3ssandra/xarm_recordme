@@ -16,6 +16,7 @@ docker run -d --rm --network host -e DISPLAY=$DISPLAY --device=/dev/ttyACM0 -v /
 onnx model from:
 https://github.com/onnx/models/blob/main/validated/vision/object_detection_segmentation/tiny-yolov3/model/tiny-yolov3-11.onnx
 https://medium.com/mlearning-ai/detecting-objects-with-yolov5-opencv-python-and-c-c7cf13d1483c
+https://github.com/onnx/models/blob/main/validated/vision/object_detection_segmentation/ssd-mobilenetv1/model/ssd_mobilenet_v1_10.onnx
 
 for orocos-kdl to work, need to run the following inside container:
 ln -s /usr/include/eigen3/Eigen/ /usr/include/Eigen
